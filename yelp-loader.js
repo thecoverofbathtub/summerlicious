@@ -3,109 +3,24 @@ let cheerio = require('cheerio');
 let fs = require('fs');
 let superagent = require('superagent');
 let url = require('url');
+let Q = require('q');
 
-let YelpLoader = function() {
-    this.template = 'https://www.yelp.com/search?find_desc=${restaurant}&find_loc=Toronto%2C+ON&ns=1';
-    this.yelpUrl = 'https://www.yelp.com';
-    this.dumpDetailsPath = './yelp.dump';
-    this.dumpFailuresPath = './failures.dump';
-    this.concurrencyLimit = 40;
-    this.results = [];
-    this.failures = [];
-};
+const yelpTemplate = 'https://www.yelp.com/search?find_desc=${restaurant}&find_loc=Toronto%2C+ON&ns=1';
+const yelpUrl = 'https://www.yelp.com';
+const detailsDumpPath = './yelp.dump';
+const failuresDumpPath = './failures.dump';
+const concurrencyLimit = 50;
 
-YelpLoader.prototype.getRestaurantDetails = function(restaurant) {
-    let restaurantSearchUrl = this.getYelpSearchUrl(restaurant);
-    return new Promise((resolve, reject) => {
-        superagent.get(restaurantSearchUrl)
-            .end((err, response) => {
-                if (err) {
-                    reject(err);
-                    return;
-                }
-                let restaurantUrl = getRestaurantUrl(response.text, this.yelpUrl);
-                if (restaurantUrl === undefined) {
-                    this.failures.push(restaurant);
-                    resolve(undefined);
-                    return;
-                }
-                superagent.get(restaurantUrl)
-                    .end((err, response) => {
-                        if (err) {
-                            reject(err);
-                            return;
-                        }
-                        let details = getRestaurantDetailsFromPage(response.text);
-                        if (details === undefined) {
-                            this.failures.push(restaurant);
-                            resolve(undefined);
-                            return;
-                        }
-                        details.name = restaurant;
-                        details.url = restaurantUrl;
-                        resolve(details);
-                    });
-            });
-    });
-};
+function getYelpSearchUrl(restaurant) {
+    return yelpTemplate.replace('${restaurant}', encodeURI(restaurant));
+}
 
-YelpLoader.prototype.getYelpSearchUrl = function(restaurant) {
-    return this.template.replace('${restaurant}', encodeURI(restaurant));
-};
-
-YelpLoader.prototype.asyncQueueWorker = function(restaurant, callback) {
-    console.log('Searching Yelp for ' + restaurant + ' ..');
-    this.getRestaurantDetails(restaurant).then(details => {
-        callback(null, details);
-    }, err => {
-        console.log(err);
-    });
-};
-
-YelpLoader.prototype.asyncQueueCallback = function(err, details) {
-    if (details === undefined) {
-        console.log('ERROR HERE');
-        return;
-    }
-    console.log('Finished pulling details of ' + details.name + ' ..');
-    this.results.push(details);
-};
-
-YelpLoader.prototype.asyncQueueDrainer = function(resolve, reject) {
-    return () => {
-        saveDetailsToFile(this.dumpDetailsPath, this.results);
-        saveFailuresToFile(this.dumpFailuresPath, this.failures);
-        resolve(this.results);
-    };
-};
-
-YelpLoader.prototype.run = function(restaurants, forceRefresh) {
-    this.results = [];
-    this.failures = [];
-    return new Promise((resolve, reject) => {
-        if (!forceRefresh) {
-            let details = readDetailsFromFile(this.dumpDetailsPath);
-            if (details !== undefined) {
-                resolve(details);
-                return;
-            }
-        }
-        let q = async.queue(this.asyncQueueWorker.bind(this), this.concurrencyLimit);
-        q.drain = this.asyncQueueDrainer(resolve).bind(this);
-        restaurants.forEach(restaurant => {
-            q.push(restaurant, this.asyncQueueCallback.bind(this));
-        });
-    });
-};
-
-
-function getRestaurantUrl(pageHtml, yelpUrl) {
+function getRestaurantUrlFromSearchPage(pageHtml) {
     try {
         let $ = cheerio.load(pageHtml);
         let href = $('.indexed-biz-name > .biz-name').first().prop('href');
         return url.resolve(yelpUrl, href);
     } catch(ex) {
-        console.log("Encountered problem at " + ex);
         return undefined;
     }
 }
@@ -120,23 +35,21 @@ function getRestaurantDetailsFromPage(pageHtml) {
             stars: parseFloat(reviewStars)
         };
     } catch(ex) {
-        console.log("Encountered problem at " + pageHtml);
         return undefined;
     }
 }
 
-function saveDetailsToFile(filePath, details) {
-    fs.writeFile(filePath,
-        JSON.stringify(details, null, 4),
-        err => {
-            if (err) {
-                throw new Error(err);
-            }
-            console.log('Restaurant details saved successfully..');
-        });
+function serializeFailures(filePath, failures) {
+    fs.writeFileSync(filePath, JSON.stringify(failures, null, 4));
+    console.log('Failed restaurants saved successfully..');
 }
 
-function readDetailsFromFile(filePath) {
+function serializeDetails(filePath, details) {
+    fs.writeFileSync(filePath, JSON.stringify(details, null, 4));
+    console.log('Restaurant details saved successfully..');
+}
+
+function deserializeDetails(filePath) {
     try {
         return JSON.parse(fs.readFileSync(filePath, 'utf8'));
     } catch(ex) {
@@ -144,15 +57,98 @@ function readDetailsFromFile(filePath) {
     }
 }
 
-function saveFailuresToFile(filePath, failures) {
-    fs.writeFile(filePath,
-        JSON.stringify(failures, null, 4),
-        err => {
+function getRestaurantDetailsUrl(restaurant) {
+    let q = Q.defer();
+    let restaurantSearchUrl = getYelpSearchUrl(restaurant);
+    superagent.get(restaurantSearchUrl)
+        .end((err, response) => {
             if (err) {
-                throw new Error(err);
+                q.reject(err);
+                return;
             }
-            console.log('Failed restaurants saved successfully..');
+            let restaurantUrl = getRestaurantUrlFromSearchPage(response.text);
+            if (!restaurantUrl) {
+                q.reject("Unable to get restaurant url for: " + restaurant);
+            }
+            else {
+                q.resolve(restaurantUrl);
+            }
+        });
+    return q.promise;
+}
+
+function getRestaurantDetails(restaurantUrl) {
+    let q = Q.defer();
+    superagent.get(restaurantUrl)
+        .end((err, response) => {
+            if (err) {
+                q.reject(err);
+                return;
+            }
+            let details = getRestaurantDetailsFromPage(response.text);
+            if (!details) {
+                q.reject("Unable to get restaurant details at: " + restaurantUrl);
+            }
+            else {
+                details.url = restaurantUrl;
+                q.resolve(details);
+            }
+        });
+    return q.promise;
+}
+
+
+function getRestaurantDetailsAsync(restaurant, callback) {
+    console.log('Searching Yelp for ' + restaurant + ' ..');
+    getRestaurantDetailsUrl(restaurant)
+        .then(getRestaurantDetails)
+        .then(details => {
+            details.name = restaurant;
+            callback(null, details);
+        })
+        .catch(err => {
+            callback(err, restaurant);
         });
 }
 
-module.exports = new YelpLoader();
+let YelpLoader = function() {
+    this.details = [];
+    this.failures = [];
+};
+
+YelpLoader.prototype.run = function(restaurants, forceRefresh) {
+    this.details = [];
+    this.failures = [];
+    if (!forceRefresh) {
+        let details = deserializeDetails(detailsDumpPath);
+        if (details) {
+            return Q.resolve(details);
+        }
+    }
+    let deferred = Q.defer();
+    let q = async.queue(getRestaurantDetailsAsync, concurrencyLimit);
+    q.drain = () => {
+        serializeDetails(detailsDumpPath, this.details);
+        serializeFailures(failuresDumpPath, this.failures);
+        deferred.resolve(this.details);
+    };
+    restaurants.forEach(restaurant =>
+        q.push(restaurant, this.processDetailsForRestaurant.bind(this))
+    );
+    return deferred.promise;
+};
+
+YelpLoader.prototype.processDetailsForRestaurant = function(err, result) {
+    const { details, failures } = this;
+    if (err) {
+        console.error(err);
+        failures.push(result);
+        return;
+    }
+    console.log('Pulled details of ' + result.name + '');
+    details.push(result);
+};
+
+let instance = new YelpLoader();
+Object.freeze(instance);
+module.exports = instance;

@@ -1,10 +1,12 @@
-let async = require('async');
 let csv = require('csv');
 let fs = require('fs');
 let restaurantsLoader = require('./restaurants-loader');
 let yelpLoader = require('./yelp-loader');
 
-function doSomething(details) {
+// const sourceUrl = 'http://www1.toronto.ca/wps/portal/contentonly?vgnextoid=04deaf2c85006410VgnVCM10000071d60f89RCRD&view=tabList';
+const sourceUrl = 'http://www1.toronto.ca/wps/portal/contentonly?vgnextoid=befeaf2c85006410VgnVCM10000071d60f89RCRD';
+
+function saveAsCsv(details) {
     let csvContent = [];
     csvContent.push(['Name', 'Yelp Rating', 'Yelp Review Count', 'Yelp Link']);
     details.forEach(detail => {
@@ -16,30 +18,13 @@ function doSomething(details) {
     });
 }
 
-function getRestaurantName(callback) {
-    restaurantsLoader.run(true)
-        .then(
-            restaurants => callback(null, restaurants),
-            err => callback(err, [])
-        );
-}
-
-function getRestaurantDetails(restaurants, callback) {
-    yelpLoader.run(restaurants, true)
-        .then(
-            details => callback(null, details),
-            err => callback(err, [])
-        );
-}
-
-async.waterfall([
-    getRestaurantName,
-    getRestaurantDetails
-], (err, details) => {
-    if (err) {
-        console.log(err);
-        return;
-    }
-    console.log('Finished ..');
-    doSomething(details);
-});
+restaurantsLoader.run(sourceUrl, true)
+    .then(restaurants => {
+        return yelpLoader.run(restaurants, true);
+    })
+    .then(details => {
+        saveAsCsv(details);
+    })
+    .catch(err => {
+        console.error(err);
+    });

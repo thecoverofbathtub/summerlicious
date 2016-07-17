@@ -1,6 +1,34 @@
 let cheerio = require('cheerio');
 let fs = require('fs');
 let phantom = require('phantom');
+let Q = require('q');
+
+const dumpPath = './restaurants.dump';
+
+function getRestaurantNames(sourceUrl) {
+    let realInstance, realPage;
+    return phantom.create()
+        .then(instance => {
+            console.log("Restaurants page loading ..");
+            realInstance = instance;
+            return instance.createPage();
+        })
+        .then(page => {
+            realPage = page;
+            return page.open(sourceUrl);
+        })
+        .then(status => {
+            console.log("Restaurants page load status: " + status);
+            return realPage.property('content');
+        })
+        .then(content => {
+            realPage.close();
+            realInstance.exit();
+            let restaurants = parseRestaurantsFromPage(content);
+            restaurants.sort();
+            return restaurants;
+        });
+}
 
 function parseRestaurantsFromPage(pageHtml) {
     let restaurants = [];
@@ -11,47 +39,12 @@ function parseRestaurantsFromPage(pageHtml) {
     return restaurants;
 }
 
-function getRestaurantNames(sourceUrl) {
-    return new Promise((resolve, reject) => {
-        let realInstance, realPage;
-        phantom.create()
-            .then(instance => {
-                realInstance = instance;
-                return instance.createPage();
-            })
-            .then(page => {
-                realPage = page;
-                return page.open(sourceUrl);
-            })
-            .then(status => {
-                console.log(status);
-                return realPage.property('content');
-            })
-            .then(content => {
-                realPage.close();
-                realInstance.exit();
-                let restaurants = parseRestaurantsFromPage(content);
-                restaurants.sort();
-                resolve(restaurants);
-            })
-            .catch(error => {
-                reject(error);
-            });
-    });
+function serializeRestaurants(filePath, restaurants) {
+    fs.writeFileSync(filePath, restaurants.join('\n'));
+    console.log('Restaurants saved successfully..');
 }
 
-function saveRestaurantsToFile(filePath, restaurants) {
-    fs.writeFile(filePath,
-        restaurants.join('\n'),
-        err => {
-            if (err) {
-                throw new Error(err);
-            }
-            console.log('Restaurants saved successfully..');
-        });
-}
-
-function readRestaurantsFromFile(filePath) {
+function deserializeRestaurants(filePath) {
     try {
         return fs.readFileSync(filePath, 'utf8').split('\n');
     } catch (ex) {
@@ -59,32 +52,23 @@ function readRestaurantsFromFile(filePath) {
     }
 }
 
-let RestaurantLoader = function() {
-    // this.sourceUrl = 'http://www1.toronto.ca/wps/portal/contentonly?vgnextoid=04deaf2c85006410VgnVCM10000071d60f89RCRD&view=tabList';
-    this.sourceUrl = 'http://www1.toronto.ca/wps/portal/contentonly?vgnextoid=befeaf2c85006410VgnVCM10000071d60f89RCRD';
-    this.dumpPath = './restaurants.dump';
-};
-
-RestaurantLoader.prototype.run = function(forceRefresh) {
-    return new Promise((resolve, reject) => {
-        if (!forceRefresh) {
-            let restaurants = readRestaurantsFromFile(this.dumpDetailsPath);
-            if (restaurants) {
-                resolve(restaurants);
-                return;
-            }
+function run(sourceUrl, forceRefresh) {
+    if (!forceRefresh) {
+        let restaurants = deserializeRestaurants(dumpPath);
+        if (restaurants) {
+            return Q.resolve(restaurants);
         }
-        getRestaurantNames(this.sourceUrl)
-            .then(
-                restaurants => {
-                    saveRestaurantsToFile(this.dumpPath, restaurants);
-                    resolve(restaurants);
-                },
-                err => {
-                    reject(err);
-                }
-            );
-    });
+    }
+    return getRestaurantNames(sourceUrl)
+        .then(restaurants => {
+            serializeRestaurants(dumpPath, restaurants);
+            return restaurants;
+        });
+}
+
+const RestaurantLoader = {
+    run
 };
 
-module.exports = new RestaurantLoader();
+Object.freeze(RestaurantLoader);
+module.exports = RestaurantLoader;

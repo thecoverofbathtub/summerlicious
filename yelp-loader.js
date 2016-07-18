@@ -133,12 +133,12 @@ YelpLoader.prototype.run = function(restaurants, forceRefresh) {
         deferred.resolve(this.details);
     };
     restaurants.forEach(restaurant =>
-        q.push(restaurant, this.processDetailsForRestaurant.bind(this))
+        q.push(restaurant, this.collectDetailsFromResult.bind(this))
     );
     return deferred.promise;
 };
 
-YelpLoader.prototype.processDetailsForRestaurant = function(err, result) {
+YelpLoader.prototype.collectDetailsFromResult = function(err, result) {
     const { details, failures } = this;
     if (err) {
         console.error(err);

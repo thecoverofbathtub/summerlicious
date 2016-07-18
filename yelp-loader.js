@@ -1,7 +1,7 @@
 let async = require('async');
 let cheerio = require('cheerio');
 let fs = require('fs');
-let superagent = require('superagent');
+let request = require('request');
 let url = require('url');
 let Q = require('q');
 
@@ -60,32 +60,30 @@ function deserializeDetails(filePath) {
 function getRestaurantDetailsUrl(restaurant) {
     let q = Q.defer();
     let restaurantSearchUrl = getYelpSearchUrl(restaurant);
-    superagent.get(restaurantSearchUrl)
-        .end((err, response) => {
-            if (err) {
-                q.reject(err);
-                return;
-            }
-            let restaurantUrl = getRestaurantUrlFromSearchPage(response.text);
-            if (!restaurantUrl) {
-                q.reject("Unable to get restaurant url for: " + restaurant);
-            }
-            else {
-                q.resolve(restaurantUrl);
-            }
-        });
+    request(restaurantSearchUrl, (err, response, body) => {
+        if (err) {
+            q.reject(err);
+            return;
+        }
+        let restaurantUrl = getRestaurantUrlFromSearchPage(body);
+        if (!restaurantUrl) {
+            q.reject("Unable to get restaurant url for: " + restaurant);
+        }
+        else {
+            q.resolve(restaurantUrl);
+        }
+    });
     return q.promise;
 }
 
 function getRestaurantDetails(restaurantUrl) {
     let q = Q.defer();
-    superagent.get(restaurantUrl)
-        .end((err, response) => {
+    request(restaurantUrl, (err, response, body) => {
             if (err) {
                 q.reject(err);
                 return;
             }
-            let details = getRestaurantDetailsFromPage(response.text);
+            let details = getRestaurantDetailsFromPage(body);
             if (!details) {
                 q.reject("Unable to get restaurant details at: " + restaurantUrl);
             }
@@ -96,7 +94,6 @@ function getRestaurantDetails(restaurantUrl) {
         });
     return q.promise;
 }
-
 
 function getRestaurantDetailsAsync(restaurant, callback) {
     console.log('Searching Yelp for ' + restaurant + ' ..');

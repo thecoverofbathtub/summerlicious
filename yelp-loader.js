@@ -61,7 +61,7 @@ function getRestaurantDetailsUrl(restaurant) {
     let q = Q.defer();
     let restaurantSearchUrl = getYelpSearchUrl(restaurant);
     request(restaurantSearchUrl, (err, response, body) => {
-        if (err) {
+        if (err || response.statusCode !== 200) {
             q.reject(err);
             return;
         }
@@ -79,19 +79,20 @@ function getRestaurantDetailsUrl(restaurant) {
 function getRestaurantDetails(restaurantUrl) {
     let q = Q.defer();
     request(restaurantUrl, (err, response, body) => {
-            if (err) {
-                q.reject(err);
-                return;
-            }
-            let details = getRestaurantDetailsFromPage(body);
-            if (!details) {
-                q.reject("Unable to get restaurant details at: " + restaurantUrl);
-            }
-            else {
-                details.url = restaurantUrl;
-                q.resolve(details);
-            }
-        });
+        if (err || response.statusCode !== 200) {
+            q.reject(err ||
+                "Unable to get restaurant details at: " + restaurantUrl + " .. " + response.statusCode);
+            return;
+        }
+        let details = getRestaurantDetailsFromPage(body);
+        if (!details) {
+            q.reject("Unable to get restaurant details at: " + restaurantUrl);
+        }
+        else {
+            details.url = restaurantUrl;
+            q.resolve(details);
+        }
+    });
     return q.promise;
 }
 
